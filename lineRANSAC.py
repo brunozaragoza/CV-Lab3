@@ -19,6 +19,7 @@ import numpy as np
 import random
 import scipy.linalg as scAlg
 import SIFTmatching as sf
+import cv2
 def drawLine(l,strFormat,lWidth):
     """
     Draw a line
@@ -34,154 +35,234 @@ def drawLine(l,strFormat,lWidth):
     p_l_x = np.array([-l[2] / l[0], 0])
     # Draw the line segment p_l_x to  p_l_y
     plt.plot([p_l_y[0], p_l_x[0]], [p_l_y[1], p_l_x[1]], strFormat, linewidth=lWidth)
-
-def ransac_homography(image_pers_1,image_pers_2):
-        # parameters of random sample selection
-    #spFrac = nOutliers/nInliers  # spurious fraction
-    P = 0.999  # probability of selecting at least one sample without spurious
-    pMinSet = 2  # number of points needed to compute the fundamental matrix
-    thresholdFactor = 1.96  # a point is spurious if abs(r/s)>factor Threshold
-
-    # number m of random samples
-    nAttempts = np.round(np.log(1 - P) / np.log(1 - np.power((1 - spFrac), pMinSet)))
-    nAttempts = nAttempts.astype(int)
-    print('nAttempts = ' + str(nAttempts))
-
-    nElements = x.shape[1]
-
-    RANSACThreshold = 3*inliersSigma
-    nVotesMax = 0
-    for kAttempt in range(nAttempts):
-
-        # Compute the minimal set defining your model
+def homography_matrix(x1,x2):
+    """
+    compute homography matrix using ground plane points on image 1 and image 2
+    -input:
+        x1: floor points on image 1
+        x2: floor points on image 2 
+    - output 
+        Homography matrix
+    """
+    A= np.ones((2*x1.shape[1],9))
+    row=0
+    for i in range(x1.shape[1]):
+        x_1= x1[0,i]
+        y_1= x1[1,i]
+        x_2= x2[0,i]
+        y_2= x2[1,i]
+        line1=[x_1,y_1,1,0,0,0,-x_1*x_2,-x_2*y_1,-x_2]
+        line2=[0,0,0,x_1,y_1,1,-x_1*y_2,-y_2*y_1,-y_2]    
+        A[row]=np.array(line1)
+        row+=1
+        A[row]=np.array(line2)
+        row+=1
+        
+    u,S,Vt= np.linalg.svd(A)
+    H= Vt[-1]
+    H=H.reshape((3,3))
+    return H
+def compute_descriptors(image_pers_1,image_pers_2):
         sift = cv2.SIFT_create(nfeatures=0, nOctaveLayers = 5, contrastThreshold = 0.02, edgeThreshold = 20, sigma = 0.5)
         keypoints_sift_1, descriptors_1 = sift.detectAndCompute(image_pers_1, None)
         keypoints_sift_2, descriptors_2 = sift.detectAndCompute(image_pers_2, None)
+        return keypoints_sift_1,descriptors_1,keypoints_sift_2,descriptors_2
 
-        distRatio = 0.8
-        minDist = 200
-        matchesList = sf.matchWith2NDRR(descriptors_1, descriptors_2, distRatio, minDist)
-        dMatchesList = indexMatrixToMatchesList(matchesList)
-        dMatchesList = sorted(dMatchesList, key=lambda x: x.distance)
-        
-        
-        # Computing the distance from the points to the model
-        res = l_model.T @ x #Since I already have normalized the line with respect the normal the dot product gives the distance
-
-        votes = np.abs(res) < RANSACThreshold  #votes
-        nVotes = np.sum(votes) # Number of votes
-
-        if nVotes > nVotesMax:
-            nVotesMax = nVotes
-            votesMax = votes
-            l_mostVoted = l_model
-
-if __name__ == '__main__':
-    np.set_printoptions(precision=4,linewidth=1024,suppress=True)
-
-    # This is the ground truth
-    l_GT = np.array([[2], [1], [-1500]])
-
-    plt.figure(1)
-    plt.plot([-100, 1800], [0, 0], '--k', linewidth=1)
-    plt.plot([0, 0], [-100, 1800], '--k', linewidth=1)
-    # Draw the line segment p_l_x to  p_l_y
-    drawLine(l_GT, 'g-', 1)
-    plt.draw()
-    plt.axis('equal')
-
-    print('Click in the image to continue...')
-    plt.waitforbuttonpress()
-
-    # Generating points lying on the line but adding perpendicular Gaussian noise
-    l_GTNorm = l_GT/np.sqrt(np.sum(l_GT[0:2]**2, axis=0)) #Normalized the line with respect to the normal norm
-
-    x_l0 = np.vstack((-l_GTNorm[0:2]*l_GTNorm[2],1))  #The closest point of the line to the origin
-    plt.plot([0, x_l0[0]], [0, x_l0[1]], '-r')
-    plt.draw()
-
-    mu = np.arange(-1000, 1000, 100)
-    inliersSigma = 10 #Standard deviation of inliers
-    xInliersGT = x_l0 + np.array([[0, -1, 0], [1, 0, 0], [0, 0, 0]]) @ (l_GTNorm * mu) + np.diag([1, 1, 0]) @ np.random.normal(0, inliersSigma, (3, len(mu)))
-    nInliers = len(mu)
-
-    # Generating uniformly random points as outliers
-    nOutliers = 5
-    xOutliersGT = np.diag([1, 1, 0]) @ (np.random.rand(3, 5)*3000-1500) + np.array([[0], [0], [1]])
-
-    plt.plot(xInliersGT[0, :], xInliersGT[1, :], 'rx')
-    plt.plot(xOutliersGT[0, :], xOutliersGT[1, :], 'bo')
-    plt.draw()
-    print('Click in the image to continue...')
-    plt.waitforbuttonpress()
-
-    x = np.hstack((xInliersGT, xOutliersGT))
-    x = x[:, np.random.permutation(x.shape[1])] # Shuffle the points
-
-    # parameters of random sample selection
-    spFrac = nOutliers/nInliers  # spurious fraction
+def ransac_homography(keypoints_sift_1,descriptors_1,keypoints_sift_2,descriptors_2):
+        # parameters of random sample selection
+    #spFrac = nOutliers/nInliers  # spurious fraction
     P = 0.999  # probability of selecting at least one sample without spurious
-    pMinSet = 2  # number of points needed to compute the fundamental matrix
+    pMinSet = 4  # number of points needed to compute the fundamental matrix
     thresholdFactor = 1.96  # a point is spurious if abs(r/s)>factor Threshold
 
     # number m of random samples
-    nAttempts = np.round(np.log(1 - P) / np.log(1 - np.power((1 - spFrac), pMinSet)))
-    nAttempts = nAttempts.astype(int)
+    nAttempts =5  #np.round(np.log(1 - P) / np.log(1 - np.power((1 - spFrac), pMinSet)))
+    #nAttempts = nAttempts.astype(int)
     print('nAttempts = ' + str(nAttempts))
 
-    nElements = x.shape[1]
-
+    inliersSigma = 10 #Standard deviation of inliers
     RANSACThreshold = 3*inliersSigma
     nVotesMax = 0
+    distRatio = 0.8
+    minDist = 200
+    matchesList = sf.matchWith2NDRR(descriptors_1, descriptors_2, distRatio, minDist)
+    dMatchesList = sf.indexMatrixToMatchesList(matchesList)
+    dMatchesList = sorted(dMatchesList, key=lambda x: x.distance)
     rng = np.random.default_rng()
+    H_most_voted=[]
+    inliers=[]
     for kAttempt in range(nAttempts):
 
-        # Compute the minimal set defining your model
-        xSubSel = rng.choice(x.T, size=pMinSet, replace=False)
-        l_model = np.reshape(np.cross(xSubSel[0], xSubSel[1]), (3, 1))
-
-        normalNorm = np.sqrt(np.sum(l_model[0:2]**2, axis=0))
-
-        l_model /= normalNorm
+        # sample matches
+        xSubSel = rng.choice(dMatchesList, size=pMinSet, replace=False)
+        pts1=[]
+        pts2=[]
+        ind_={}
+        for match in xSubSel:
+            p1 = keypoints_sift_1[match.queryIdx].pt
+            pts1.append([p1[0],p1[1]])
+            p2 = keypoints_sift_2[match.trainIdx].pt
+            pts2.append([p2[0],p2[1]])
+            ind_[match.queryIdx]=match.trainIdx
+        pts1=np.array(pts1)
+        pts2=np.array(pts2)
+        #compute the Homography for these sample points
+        H= homography_matrix(pts1,pts2)
+        print(pts1.shape)
+        #get points not used for sampling
+        other_points_p1=[]
+        other_points_p2=[]
+        #TODO This wrong. fix this
+        for key in ind_.keys():
+            for match in dMatchesList:
+                    if abs(match.queryIdx-key)>0:
+                        p1 = keypoints_sift_1[match.queryIdx].pt
+                        p1=np.array([p1[0],p1[1]])
+                        other_points_p1.append(p1)
+                    if abs(match.trainIdx-ind_[key])>0:   
+                        p2 = keypoints_sift_2[match.trainIdx].pt
+                        p2=np.array([p2[0],p2[1]])
+                        other_points_p2.append(p2)
+                        
+        other_points_p1=np.array(other_points_p1)
+        other_points_p2=np.array(other_points_p2)
         # Computing the distance from the points to the model
-        res = l_model.T @ x #Since I already have normalized the line with respect the normal the dot product gives the distance
-
-        votes = np.abs(res) < RANSACThreshold  #votes
+        pts_t=[]
+        for pt in range(other_points_p1.shape[0]):
+            pts_t.append(H@other_points_p1[pt])
+        
+        epsilon= pts_t-other_points_p2
+        
+        votes = np.abs(epsilon) < RANSACThreshold  #votes
         nVotes = np.sum(votes) # Number of votes
 
         if nVotes > nVotesMax:
             nVotesMax = nVotes
             votesMax = votes
-            l_mostVoted = l_model
+            H_most_voted = H  
+            inliers=xSubSel
+    return H,inliers          
+# if __name__ == '__main__':
+#     np.set_printoptions(precision=4,linewidth=1024,suppress=True)
+
+#     # This is the ground truth
+#     l_GT = np.array([[2], [1], [-1500]])
+
+#     plt.figure(1)
+#     plt.plot([-100, 1800], [0, 0], '--k', linewidth=1)
+#     plt.plot([0, 0], [-100, 1800], '--k', linewidth=1)
+#     # Draw the line segment p_l_x to  p_l_y
+#     drawLine(l_GT, 'g-', 1)
+#     plt.draw()
+#     plt.axis('equal')
+
+#     print('Click in the image to continue...')
+#     plt.waitforbuttonpress()
+
+#     # Generating points lying on the line but adding perpendicular Gaussian noise
+#     l_GTNorm = l_GT/np.sqrt(np.sum(l_GT[0:2]**2, axis=0)) #Normalized the line with respect to the normal norm
+
+#     x_l0 = np.vstack((-l_GTNorm[0:2]*l_GTNorm[2],1))  #The closest point of the line to the origin
+#     plt.plot([0, x_l0[0]], [0, x_l0[1]], '-r')
+#     plt.draw()
+
+#     mu = np.arange(-1000, 1000, 100)
+#     inliersSigma = 10 #Standard deviation of inliers
+#     xInliersGT = x_l0 + np.array([[0, -1, 0], [1, 0, 0], [0, 0, 0]]) @ (l_GTNorm * mu) + np.diag([1, 1, 0]) @ np.random.normal(0, inliersSigma, (3, len(mu)))
+#     nInliers = len(mu)
+
+#     # Generating uniformly random points as outliers
+#     nOutliers = 5
+#     xOutliersGT = np.diag([1, 1, 0]) @ (np.random.rand(3, 5)*3000-1500) + np.array([[0], [0], [1]])
+
+#     plt.plot(xInliersGT[0, :], xInliersGT[1, :], 'rx')
+#     plt.plot(xOutliersGT[0, :], xOutliersGT[1, :], 'bo')
+#     plt.draw()
+#     print('Click in the image to continue...')
+#     plt.waitforbuttonpress()
+
+#     x = np.hstack((xInliersGT, xOutliersGT))
+#     x = x[:, np.random.permutation(x.shape[1])] # Shuffle the points
+
+#     # parameters of random sample selection
+#     spFrac = nOutliers/nInliers  # spurious fraction
+#     P = 0.999  # probability of selecting at least one sample without spurious
+#     pMinSet = 2  # number of points needed to compute the fundamental matrix
+#     thresholdFactor = 1.96  # a point is spurious if abs(r/s)>factor Threshold
+
+#     # number m of random samples
+#     nAttempts = np.round(np.log(1 - P) / np.log(1 - np.power((1 - spFrac), pMinSet)))
+#     nAttempts = nAttempts.astype(int)
+#     print('nAttempts = ' + str(nAttempts))
+
+#     nElements = x.shape[1]
+
+#     RANSACThreshold = 3*inliersSigma
+#     nVotesMax = 0
+#     rng = np.random.default_rng()
+#     for kAttempt in range(nAttempts):
+
+#         # Compute the minimal set defining your model
+#         xSubSel = rng.choice(x.T, size=pMinSet, replace=False)
+#         l_model = np.reshape(np.cross(xSubSel[0], xSubSel[1]), (3, 1))
+
+#         normalNorm = np.sqrt(np.sum(l_model[0:2]**2, axis=0))
+
+#         l_model /= normalNorm
+#         # Computing the distance from the points to the model
+#         res = l_model.T @ x #Since I already have normalized the line with respect the normal the dot product gives the distance
+
+#         votes = np.abs(res) < RANSACThreshold  #votes
+#         nVotes = np.sum(votes) # Number of votes
+
+#         if nVotes > nVotesMax:
+#             nVotesMax = nVotes
+#             votesMax = votes
+#             l_mostVoted = l_model
 
 
-    drawLine(l_mostVoted, 'b-', 1)
+#     drawLine(l_mostVoted, 'b-', 1)
+#     plt.draw()
+#     plt.waitforbuttonpress()
+
+
+#     # Filter the outliers and fit the line
+#     iVoted = np.squeeze(np.argwhere(np.squeeze(votesMax)))
+#     xInliers = x[:, iVoted]
+
+#     plt.plot(xInliers[0, :], xInliers[1, :], 'y*')
+#     plt.draw()
+#     plt.waitforbuttonpress()
+
+#     # Fit the least squares solution of inliers using svd
+#     u, s, vh = np.linalg.svd(xInliers.T)
+#     l_ls = vh[-1, :]
+
+#     drawLine(l_ls, 'r--', 1)
+#     plt.draw()
+#     plt.waitforbuttonpress()
+
+#     # Project the points on the line using SVD
+#     s[2] = 0
+#     xInliersProjectedOnTheLine = (u @ scAlg.diagsvd(s, u.shape[0], vh.shape[0]) @ vh).T
+#     xInliersProjectedOnTheLine /= xInliersProjectedOnTheLine[2, :]
+
+#     plt.plot(xInliersProjectedOnTheLine[0,:], xInliersProjectedOnTheLine[1, :], 'bx')
+#     plt.draw()
+#     plt.waitforbuttonpress()
+#     print('End')
+
+if __name__ == '__main__':
+    path_image_1 = 'image1.png'
+    path_image_2 = 'image2.png'
+
+    # Read images
+    image_pers_1 = cv2.imread(path_image_1)
+    image_pers_2 = cv2.imread(path_image_2)
+    keypoints_sift_1,descriptors_1,keypoints_sift_2,descriptors_2= compute_descriptors(image_pers_1,image_pers_2)
+    H, inliers= ransac_homography(keypoints_sift_1,descriptors_1,keypoints_sift_2,descriptors_2)
+    imgMatched = cv2.drawMatches(image_pers_1, keypoints_sift_1, image_pers_2, keypoints_sift_2, inliers,
+                                 None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS and cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    plt.imshow(imgMatched, cmap='gray', vmin=0, vmax=255)
     plt.draw()
     plt.waitforbuttonpress()
-
-
-    # Filter the outliers and fit the line
-    iVoted = np.squeeze(np.argwhere(np.squeeze(votesMax)))
-    xInliers = x[:, iVoted]
-
-    plt.plot(xInliers[0, :], xInliers[1, :], 'y*')
-    plt.draw()
-    plt.waitforbuttonpress()
-
-    # Fit the least squares solution of inliers using svd
-    u, s, vh = np.linalg.svd(xInliers.T)
-    l_ls = vh[-1, :]
-
-    drawLine(l_ls, 'r--', 1)
-    plt.draw()
-    plt.waitforbuttonpress()
-
-    # Project the points on the line using SVD
-    s[2] = 0
-    xInliersProjectedOnTheLine = (u @ scAlg.diagsvd(s, u.shape[0], vh.shape[0]) @ vh).T
-    xInliersProjectedOnTheLine /= xInliersProjectedOnTheLine[2, :]
-
-    plt.plot(xInliersProjectedOnTheLine[0,:], xInliersProjectedOnTheLine[1, :], 'bx')
-    plt.draw()
-    plt.waitforbuttonpress()
-    print('End')

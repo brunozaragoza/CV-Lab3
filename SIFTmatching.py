@@ -90,7 +90,12 @@ if __name__ == '__main__':
     matchesList = matchWith2NDRR(descriptors_1, descriptors_2, distRatio, minDist)
     dMatchesList = indexMatrixToMatchesList(matchesList)
     dMatchesList = sorted(dMatchesList, key=lambda x: x.distance)
-
+    rng = np.random.default_rng()
+    xSubSel = rng.choice(dMatchesList, size=4, replace=False)
+    for match in xSubSel:
+        p1 = keypoints_sift_1[match.queryIdx].pt
+        p2 = keypoints_sift_2[match.trainIdx].pt
+        print(p1)
     # Plot the first 10 matches
     imgMatched = cv2.drawMatches(image_pers_1, keypoints_sift_1, image_pers_2, keypoints_sift_2, dMatchesList[:100],
                                  None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS and cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
