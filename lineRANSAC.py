@@ -68,26 +68,26 @@ def compute_descriptors(image_pers_1,image_pers_2):
         keypoints_sift_2, descriptors_2 = sift.detectAndCompute(image_pers_2, None)
         return keypoints_sift_1,descriptors_1,keypoints_sift_2,descriptors_2
 
-def ransac_homography(keypoints_sift_1,descriptors_1,keypoints_sift_2,descriptors_2):
+def compute_matches(distRatio,minDist,descriptors_1, descriptors_2):
+    matchesList = sf.matchWith2NDRR(descriptors_1, descriptors_2, distRatio, minDist)
+    dMatchesList = sf.indexMatrixToMatchesList(matchesList)
+    dMatchesList = sorted(dMatchesList, key=lambda x: x.distance)
+    return dMatchesList
+
+def ransac_homography(dMatchesList,inliersSigma=10):
         # parameters of random sample selection
-    #spFrac = nOutliers/nInliers  # spurious fraction
     P = 0.999  # probability of selecting at least one sample without spurious
     pMinSet = 4  # number of points needed to compute the fundamental matrix
     thresholdFactor = 1.96  # a point is spurious if abs(r/s)>factor Threshold
 
     # number m of random samples
-    nAttempts =5  #np.round(np.log(1 - P) / np.log(1 - np.power((1 - spFrac), pMinSet)))
-    #nAttempts = nAttempts.astype(int)
+    nAttempts =np.round(np.log(1 - P) / np.log(1 - np.power((1 - 0.3), pMinSet)))
+    nAttempts = nAttempts.astype(int)
     print('nAttempts = ' + str(nAttempts))
 
-    inliersSigma = 10 #Standard deviation of inliers
     RANSACThreshold = 3*inliersSigma
     nVotesMax = 0
-    distRatio = 0.8
-    minDist = 200
-    matchesList = sf.matchWith2NDRR(descriptors_1, descriptors_2, distRatio, minDist)
-    dMatchesList = sf.indexMatrixToMatchesList(matchesList)
-    dMatchesList = sorted(dMatchesList, key=lambda x: x.distance)
+
     rng = np.random.default_rng()
     H_most_voted=[]
     inliers=[]
@@ -108,40 +108,59 @@ def ransac_homography(keypoints_sift_1,descriptors_1,keypoints_sift_2,descriptor
         pts2=np.array(pts2)
         #compute the Homography for these sample points
         H= homography_matrix(pts1,pts2)
-        print(pts1.shape)
         #get points not used for sampling
         other_points_p1=[]
         other_points_p2=[]
-        #TODO This wrong. fix this
-        for key in ind_.keys():
-            for match in dMatchesList:
-                    if abs(match.queryIdx-key)>0:
-                        p1 = keypoints_sift_1[match.queryIdx].pt
-                        p1=np.array([p1[0],p1[1]])
-                        other_points_p1.append(p1)
-                    if abs(match.trainIdx-ind_[key])>0:   
-                        p2 = keypoints_sift_2[match.trainIdx].pt
-                        p2=np.array([p2[0],p2[1]])
-                        other_points_p2.append(p2)
-                        
+        for match in xSubSel:
+            dMatchesList.remove(match)
+        for match in dMatchesList:
+            p1 = keypoints_sift_1[match.queryIdx].pt
+            other_points_p1.append([p1[0],p1[1]])
+            p2 = keypoints_sift_2[match.trainIdx].pt
+            other_points_p2.append([p2[0],p2[1]])
+            ind_[match.queryIdx]=match.trainIdx
+        
+                                
         other_points_p1=np.array(other_points_p1)
         other_points_p2=np.array(other_points_p2)
         # Computing the distance from the points to the model
         pts_t=[]
         for pt in range(other_points_p1.shape[0]):
-            pts_t.append(H@other_points_p1[pt])
-        
+            point=np.ones((3,1))
+            point[0]= other_points_p1[pt,0]
+            point[1]=other_points_p1[pt,1]
+            pt_t=H@point
+            pt_t/=pt_t[-1]
+            pts_t.append([pt_t[0],pt_t[1]])
+        if len(pts_t)==0:
+            break
+        pts_t=np.array(pts_t)[:,:,0]
         epsilon= pts_t-other_points_p2
-        
         votes = np.abs(epsilon) < RANSACThreshold  #votes
         nVotes = np.sum(votes) # Number of votes
 
         if nVotes > nVotesMax:
             nVotesMax = nVotes
             votesMax = votes
-            H_most_voted = H  
-            inliers=xSubSel
-    return H,inliers          
+            H_most_voted = H
+    return H_most_voted
+
+def reproj_error(H,matches,threshold):
+    reproj_error=0.
+    inliers=[]
+    for match in matches:
+        p1 = keypoints_sift_1[match.queryIdx].pt
+        p2 = keypoints_sift_2[match.trainIdx].pt
+        p1_t= H@np.array([p1[0],p1[1],1.])
+        p1_t/=p1_t[-1]
+        p1_t=p1_t[:2]
+        p2=np.array([p2[0],p2[1]])
+        reproj_error+= np.sqrt(np.linalg.norm(p2-p1_t))
+        if np.sqrt(np.linalg.norm(p2-p1_t))<threshold:
+            inliers.append(match)
+        
+    return reproj_error/len(matches)*1.,inliers
+              
 # if __name__ == '__main__':
 #     np.set_printoptions(precision=4,linewidth=1024,suppress=True)
 
@@ -260,9 +279,15 @@ if __name__ == '__main__':
     image_pers_1 = cv2.imread(path_image_1)
     image_pers_2 = cv2.imread(path_image_2)
     keypoints_sift_1,descriptors_1,keypoints_sift_2,descriptors_2= compute_descriptors(image_pers_1,image_pers_2)
-    H, inliers= ransac_homography(keypoints_sift_1,descriptors_1,keypoints_sift_2,descriptors_2)
+    distRatio=0.8
+    minDist=400
+    matches=compute_matches(distRatio,minDist,descriptors_1, descriptors_2)
+    H= ransac_homography(matches,5)
+    err,inliers=reproj_error(H,matches,18.)
+    print("error",err)
     imgMatched = cv2.drawMatches(image_pers_1, keypoints_sift_1, image_pers_2, keypoints_sift_2, inliers,
                                  None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS and cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    
     plt.imshow(imgMatched, cmap='gray', vmin=0, vmax=255)
     plt.draw()
     plt.waitforbuttonpress()
