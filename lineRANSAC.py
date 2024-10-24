@@ -289,10 +289,8 @@ if __name__ == '__main__':
     matches=compute_matches(distRatio,minDist,descriptors_1, descriptors_2)
     H= ransac_homography(matches,30)
     err,inliers=reproj_error(H,matches)
-    print(err)
     imgMatched = cv2.drawMatches(image_pers_1, keypoints_sift_1, image_pers_2, keypoints_sift_2, inliers,
                                  None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS and cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    print(err)
     plt.imshow(imgMatched, cmap='gray', vmin=0, vmax=255)
     plt.draw()
     plt.waitforbuttonpress()
