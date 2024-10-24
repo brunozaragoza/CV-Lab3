@@ -115,7 +115,7 @@ def ransac_homography(dMatchesList,inliersSigma=10):
             dMatchesList.remove(match)
         for match in dMatchesList:
             p1 = keypoints_sift_1[match.queryIdx].pt
-            other_points_p1.append([p1[0],p1[1]])
+            other_points_p1.append([p1[0],p1[1],1.])
             p2 = keypoints_sift_2[match.trainIdx].pt
             other_points_p2.append([p2[0],p2[1]])
             ind_[match.queryIdx]=match.trainIdx
@@ -124,19 +124,14 @@ def ransac_homography(dMatchesList,inliersSigma=10):
         other_points_p1=np.array(other_points_p1)
         other_points_p2=np.array(other_points_p2)
         # Computing the distance from the points to the model
-        pts_t=[]
-        for pt in range(other_points_p1.shape[0]):
-            point=np.ones((3,1))
-            point[0]= other_points_p1[pt,0]
-            point[1]=other_points_p1[pt,1]
-            pt_t=H@point
-            pt_t/=pt_t[-1]
-            pts_t.append([pt_t[0],pt_t[1]])
-        if len(pts_t)==0:
-            break
-        pts_t=np.array(pts_t)[:,:,0]
+        pts_t=H@other_points_p1.T
+        pts_t=pts_t.T
+        pts_t[:,0]=pts_t[:,0]/pts_t[:,-1]
+        pts_t[:,1]=pts_t[:,1]/pts_t[:,-1]
+        pts_t=pts_t[:,:2]
+
         epsilon= pts_t-other_points_p2
-        votes = np.abs(epsilon) < RANSACThreshold  #votes
+        votes = np.sqrt(np.linalg.norm(epsilon,axis=1)) < RANSACThreshold  #votes
         nVotes = np.sum(votes) # Number of votes
 
         if nVotes > nVotesMax:
@@ -145,21 +140,31 @@ def ransac_homography(dMatchesList,inliersSigma=10):
             H_most_voted = H
     return H_most_voted
 
-def reproj_error(H,matches,threshold):
+def reproj_error(H,matches):
     reproj_error=0.
     inliers=[]
+    ct=0
+    pts1=[]
+    pts2=[]
     for match in matches:
         p1 = keypoints_sift_1[match.queryIdx].pt
         p2 = keypoints_sift_2[match.trainIdx].pt
-        p1_t= H@np.array([p1[0],p1[1],1.])
-        p1_t/=p1_t[-1]
-        p1_t=p1_t[:2]
-        p2=np.array([p2[0],p2[1]])
-        reproj_error+= np.sqrt(np.linalg.norm(p2-p1_t))
-        if np.sqrt(np.linalg.norm(p2-p1_t))<threshold:
-            inliers.append(match)
-        
-    return reproj_error/len(matches)*1.,inliers
+        p1= [p1[0],p1[1],1.]
+        p2=[p2[0],p2[1]]
+        pts1.append(p1)
+        pts2.append(p2)
+        ct+=1
+    pts_t=H@np.array(pts1).T
+    pts_t=pts_t.T
+    pts_t[:,0]=pts_t[:,0]/pts_t[:,-1]
+    pts_t[:,1]=pts_t[:,1]/pts_t[:,-1]
+    pts_t=pts_t[:,:2]
+    pts2=np.array(pts2)
+    
+    reproj_error= np.sqrt(np.linalg.norm(pts2-pts_t,axis=1)).mean()
+    #condition= 
+    inliers=[]
+    return reproj_error,inliers
               
 # if __name__ == '__main__':
 #     np.set_printoptions(precision=4,linewidth=1024,suppress=True)
@@ -280,14 +285,14 @@ if __name__ == '__main__':
     image_pers_2 = cv2.imread(path_image_2)
     keypoints_sift_1,descriptors_1,keypoints_sift_2,descriptors_2= compute_descriptors(image_pers_1,image_pers_2)
     distRatio=0.8
-    minDist=400
+    minDist=200
     matches=compute_matches(distRatio,minDist,descriptors_1, descriptors_2)
-    H= ransac_homography(matches,5)
-    err,inliers=reproj_error(H,matches,18.)
-    print("error",err)
+    H= ransac_homography(matches,30)
+    err,inliers=reproj_error(H,matches)
+    print(err)
     imgMatched = cv2.drawMatches(image_pers_1, keypoints_sift_1, image_pers_2, keypoints_sift_2, inliers,
                                  None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS and cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    
+    print(err)
     plt.imshow(imgMatched, cmap='gray', vmin=0, vmax=255)
     plt.draw()
     plt.waitforbuttonpress()
